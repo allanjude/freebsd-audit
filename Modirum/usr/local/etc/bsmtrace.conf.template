@@ -1,0 +1,156 @@
+#
+# Define our logging channels
+#
+log-channel $syslog_crit <syslog> {
+	priority security.crit;
+};
+
+log-channel $syslog_warn <syslog> {
+	priority security.warning;
+};
+
+define set $my_log_channels <logchannel> {
+	$syslog;
+};
+
+#
+# Define subject (or user) groupings
+#
+#define set $admins <auid> {
+#	foo,
+#	bar;
+#};
+
+define set $daemons <euid> {
+	operator;
+};
+
+#
+# Define various event groups that we are interested in
+#
+define set $execution <auditevent> {
+	AUE_EXEC,
+	AUE_EXECVE;
+};
+
+define set $login <auditevent> {
+	AUE_openssh,
+	AUE_login,
+	AUE_su;
+};
+
+#
+# Define our object (or file) groups
+#
+define set $trusteddirs <path> {
+	/bin,
+	/sbin,
+	/usr/bin,
+	/usr/sbin;
+};
+
+define set $daemondirs <path> {
+	/libexec,
+	/usr/libexec,
+	/usr/local/libexec;
+};
+
+define set $localdirs <path> {
+	/usr/local/bin,
+	/usr/local/sbin;
+};
+
+define set $execdirs <path> {
+    /root/hostaudit.sh,
+    /bin,
+    /sbin,
+    /usr/bin,
+    /usr/sbin,
+    /usr/games,
+    /usr/local/bin,
+    /usr/local/sbin,
+    /libexec,
+    /usr/libexec,
+    /usr/local/libexec,
+    /usr/local/libexec/nagios,
+    /etc/rc.d,
+    /etc/periodic,
+    /etc/dhclient-script,
+    /usr/local/etc/rc.d,
+    /usr/local/etc/jails_hook,
+    /data/jails/poudriere/root,
+    /root/pkg2dw/src,
+    /usr/local/etc/periodicEXECDIRS;
+};
+
+define set $opendirs <path> {
+	/tmp,
+	/var/tmp;
+};
+
+define set $fwtools <path> {
+	/sbin/ipfw,
+	/sbin/pfctl,
+	/sbin/ipf;
+};
+
+############################################################
+#
+# Define our state machines or actual "IDS signatures"
+#
+############################################################
+
+sequence non.trusted.exec {
+	subject any;
+#	log <logchannel> { $syslog_crit; };
+	state {
+		event $execution;
+		object not $execdirs;
+		trigger "/usr/bin/logger -p security.crit non.trusted.exec: $esubject ($subject) executed $object";
+		status success;
+	};
+};
+
+sequence login.brute.force {
+	subject any;
+#	log <logchannel> { $syslog_crit; };
+	state {
+		event $login;
+		status failure;
+		multiplier 2;
+	};
+	state {
+		event $login;
+		trigger "/usr/bin/logger -p security.crit login.brute.force: Login success for $esubject ($subject) after multiple attempts";
+		status success;
+	};
+};
+
+sequence httpd.exec {
+	subject <euid> { www; };
+#	log <logchannel> { $syslog_crit; };
+	state {
+		event <auditevent> { AUE_SOCKET; };
+		status success;
+	};
+	state {
+		event <auditevent> { AUE_BIND; };
+		status success;
+	};
+	state {
+		event $execution;
+		trigger "/usr/bin/logger -p security.crit httpd.exec: Program execution by www-user ($execution)";
+		status any;
+	};
+};
+
+#sequence admin.exec {
+#	subject $admins;
+##	log <logchannel> { $syslog_warn; };
+#	state {
+#		event $execution;
+#		object not $trusteddirs;
+#		trigger "/usr/bin/logger -p security.warning admin.exec: Program execution by admin-user $esubject ($subject): ($object)";
+#		status any;
+#	};
+#};
