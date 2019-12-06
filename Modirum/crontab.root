@@ -1,0 +1,7 @@
+PATH="/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin"
+
+# Puppet Name: jailhosts_audit_n
+0 */6 * * * /usr/sbin/audit -n
+
+# Puppet Name: jailhosts_hostaudit_ids
+20 20 * * * /bin/sh /root/hostaudit.sh ids

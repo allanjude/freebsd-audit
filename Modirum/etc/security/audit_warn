@@ -1,0 +1,98 @@
+#!/bin/sh
+#
+# $P4: //depot/projects/trustedbsd/openbsm/etc/audit_warn#3 $
+# $FreeBSD: release/10.0.0/contrib/openbsm/etc/audit_warn 157137 2006-03-26 01:44:35Z rwatson $
+#
+
+logger -p security.warning "audit warning: $@"
+action=$1
+self='audit_warn'
+log="/var/log/${self}.log"
+pidfile="/var/run/${self}.pid"
+child=`mktemp -u -t "${self}_${action}"`
+
+scriptname="hostaudit.sh"
+sleeponfailure=10
+
+cleanup() {
+    [ -f "/tmp/`basename ${0}`" ] && rm -f "/tmp/`basename ${0}`"
+}
+
+case "$action" in
+    closefile)
+        date >> ${log}
+        echo "Using child process from ${child} .." >> ${log}
+        cp $(realpath ${0}) ${child} && daemon -o ${log} -t ${self} -p ${pidfile} -T ${self} /bin/sh `realpath ${child}` logsync
+        rc=$?
+        case $rc in
+            0)
+                echo "NOTICE: $self - Launched logsync in background as ${child} (PID `cat ${pidfile}`)" | tee -a ${log} | logger -p security.warn
+                ;;
+            3)
+                echo "WARNING: $self - Logsync process already running as PID `cat ${pidfile}`" | tee -a ${log} | logger -p security.warn
+                ;;
+            *)
+                echo "CRITICAL: $self - Could not launch logsync process, unknown error (RC=${rc})" | tee -a ${log} | logger -p security.crit
+                ;;
+        esac
+        ;;
+    logsync)
+        for i in `seq 5` ; do
+            [ -f '/var/puppet/state/agent_catalog_run.lock' ] || break
+            echo "NOTICE: $self - Puppet agent run already in progress, sleeping for ${sleeponfailure} seconds." | tee -a ${log} | logger -p security.warn
+            sleep $sleeponfailure
+        done
+
+        for i in `seq 5` ; do
+            /usr/local/bin/puppet agent --test --detailed-exitcodes --tags modirum_auditing --server PUPPETSERVER 2>&1 >> ${log} ; rc=$?
+            if [ $rc -eq 1 ] ; then
+                echo "NOTICE: $self - Could not execute puppet agent, retrying in ${sleeponfailure} seconds." | tee -a ${log} | logger -p security.warn
+                sleep $sleeponfailure
+            else
+                break
+            fi
+        done
+
+        case $rc in
+            1)
+                echo "CRITICAL: $self - Could not execute puppet agent, HIDS not running!" | tee -a ${log} | logger -p security.crit
+                logger -p security.warn "CRITICAL: $self - Could not execute puppet agent, HIDS not running!"
+                exit
+                ;;
+            2)
+                echo "NOTICE: $self - Puppet agent made changes to system. Using new HIDS config." | tee -a ${log} | logger -p security.warn
+                ;;
+            4)
+                echo "WARNING: $self - Puppet agent failed partially, no changes made. Using existing HIDS config." | tee -a ${log} | logger -p security.crit
+                logger -p security.warn "WARNING: $self - Puppet agent failed partially, no changes made. Using existing HIDS config."
+                ;;
+            6)
+                echo "WARNING: $self - Puppet agent failed partially, changes were made to system, HIDS not running!" | tee -a ${log} | logger -p security.crit
+                logger -p security.warn "WARNING: $self - Puppet agent failed partially, changes were made to system, HIDS not running!"
+                exit
+                ;;
+            0)
+                echo "NOTICE: $self - Puppet agent run successfully, no changes made. Using existing HIDS config." | tee -a ${log} | logger -p security.warn
+                ;;
+            *)
+                echo "CRITICAL: $self - Puppet agent exited with unknown exit code, HIDS not running!" | tee -a ${log} | logger -p security.crit
+                logger -p security.warn "CRITICAL: $self - Puppet agent exited with unknown exit code, HIDS not running!"
+                exit
+                ;;
+        esac
+
+        if [ ! -f "/root/${scriptname}" ] ; then
+            echo "CRITICAL: $self - Could not find/load $scriptname !" | tee -a ${log} | logger -p security.crit
+            exit
+        fi
+
+        /bin/sh /root/${scriptname} logsync || echo "CRITICAL: $self - Could not archive logs!" | tee -a ${log} | logger -p security.crit
+        echo "End of logsync." | tee -a ${log} | logger -p security.warn
+        ;;
+    *)
+        ;;
+esac
+
+echo "End of ${self} ${1}." | tee -a ${log} | logger -p security.warn
+trap cleanup EXIT
+exit 0
